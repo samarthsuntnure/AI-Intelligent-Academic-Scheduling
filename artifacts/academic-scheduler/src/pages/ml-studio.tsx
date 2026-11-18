@@ -11,6 +11,14 @@ function readFile(file: File): Promise<string> {
   return new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve(String(r.result||'')); r.onerror=()=>reject(r.error); r.readAsText(file); });
 }
 
+function getStartMinutes(value: string) {
+  const match = value.match(/(\d{1,2}):(\d{2})/);
+  if (!match) return Number.MAX_SAFE_INTEGER;
+  let hour = Number(match[1]);
+  if (hour >= 1 && hour <= 7) hour += 12;
+  return hour * 60 + Number(match[2]);
+}
+
 function DownloadButton({ label, text, filename }: { label:string; text?:string; filename:string; key?:string }) {
   if (!text) return null;
   const href = `data:text/csv;charset=utf-8,${encodeURIComponent(text)}`;
@@ -103,6 +111,27 @@ export default function MLStudio() {
   const metric = model?.test_metrics;
   const best = model?.best_model;
   const comparison = model?.models || [];
+  const sessionsByDivision = useMemo(() => {
+    const groups = new Map<string, any[]>();
+    for (const session of result?.sessions || []) {
+      const division = String(session.division || 'Unassigned');
+      const sessions = groups.get(division);
+      if (sessions) sessions.push(session);
+      else groups.set(division, [session]);
+    }
+    return Array.from(groups, ([division, sessions]) => ({
+      division,
+      sessions: sessions.sort((a, b) => {
+        const dayIndex = (day: string) => {
+          const index = DAYS.indexOf(day);
+          return index < 0 ? DAYS.length : index;
+        };
+        return dayIndex(a.day) - dayIndex(b.day)
+          || getStartMinutes(a.time) - getStartMinutes(b.time)
+          || String(a.subject).localeCompare(String(b.subject));
+      }),
+    })).sort((a, b) => a.division.localeCompare(b.division));
+  }, [result]);
 
   return <div className="animate-rise-in">
     <PageIntro eyebrow="Admin · Machine Learning" title="AI/ML Timetable Studio" description="Data → cleaning → preprocessing → feature engineering → ML scoring → constraint optimization → timetable evaluation." action={<div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={loadSample} disabled={busy==='sample'}><Sparkles size={14}/> {busy==='sample'?'Loading…':'Load Sample Dataset'}</Button><Button onClick={generate} disabled={!ready||!model||!!busy}><Play size={14}/> {busy==='generate'?'Optimizing…':model?'Generate Timetable':'Compare Models First'}</Button></div>} />
@@ -184,7 +213,37 @@ export default function MLStudio() {
         <MetricCard label="Required tasks" value={result.task_count} note="Subject sessions" icon={Settings2} accent="blue"/>
         <MetricCard label="Hard conflicts" value={result.conflicts.length} note={result.conflicts.length?'Needs review':'All satisfied'} icon={result.conflicts.length?Settings2:CheckCircle2} accent={result.conflicts.length?'red':'teal'}/>
       </div>
-      <div className="overflow-x-auto rounded-xl border border-border"><table className="w-full text-left text-xs"><thead className="bg-muted/50"><tr><th className="p-3">Day</th><th>Time</th><th>Division</th><th>Subject</th><th>Faculty</th><th>Room</th><th>ML score</th></tr></thead><tbody>{result.sessions.map((s:any,i:number)=><tr key={`${s.day}-${s.time}-${i}`} className="border-t border-border"><td className="p-3 font-bold">{s.day}</td><td>{s.time}</td><td>{s.division}</td><td className="font-bold">{s.subject}</td><td>{s.faculty}</td><td>{s.room}</td><td>{s.mlScore}%</td></tr>)}</tbody></table></div>
+      <div className="space-y-4">
+        {sessionsByDivision.map(({ division, sessions }) => (
+          <section key={division} className="overflow-hidden rounded-xl border border-border">
+            <div className="flex items-center justify-between gap-3 bg-muted/40 px-4 py-3">
+              <h3 className="text-sm font-extrabold">Division {division}</h3>
+              <StatusPill>{sessions.length} sessions</StatusPill>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-xs">
+                <thead className="bg-muted/20">
+                  <tr><th className="p-3">Day</th><th>Time</th><th>Subject</th><th>Type</th><th>For</th><th>Faculty</th><th>Room</th><th>ML score</th></tr>
+                </thead>
+                <tbody>
+                  {sessions.map((s: any, i: number) => (
+                    <tr key={`${s.day}-${s.time}-${s.subject}-${i}`} className="border-t border-border">
+                      <td className="p-3 font-bold">{s.day}</td>
+                      <td>{s.time}</td>
+                      <td className="font-bold">{s.subject}</td>
+                      <td>{s.classType}</td>
+                      <td>{s.cohort || 'All students'}</td>
+                      <td>{s.faculty}</td>
+                      <td>{s.room}</td>
+                      <td>{s.mlScore}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ))}
+      </div>
       {result.conflicts.length>0&&<div className="mt-4 rounded-xl bg-destructive/5 p-4">{result.conflicts.map((c:any,i:number)=><p key={i} className="text-xs text-destructive"><b>{c.title}:</b> {c.detail}</p>)}</div>}
     </section>}
 

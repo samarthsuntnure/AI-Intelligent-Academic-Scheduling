@@ -1,6 +1,6 @@
 {
   "model_version": "1.0",
-  "trained_at": "2026-11-18T14:12:07",
+  "trained_at": "2026-11-19T02:34:22",
   "dataset_label": "Synthetic Training Data",
   "rows": 60000,
   "train_rows": 42000,
@@ -9,83 +9,103 @@
   "models": [
     {
       "model": "Decision Tree",
-      "accuracy": 0.9541111111111111,
-      "precision": 0.9493087557603687,
-      "recall": 0.8717731696995344,
-      "f1": 0.9088903595852637
+      "accuracy": 0.9571111111111111,
+      "precision": 0.9575721862109605,
+      "recall": 0.9306987399770905,
+      "f1": 0.943944234679059
     },
     {
       "model": "Random Forest",
-      "accuracy": 0.9577777777777777,
-      "precision": 0.9639681796911558,
-      "recall": 0.8717731696995344,
-      "f1": 0.9155555555555556
+      "accuracy": 0.9593333333333334,
+      "precision": 0.9621525724423418,
+      "recall": 0.93184421534937,
+      "f1": 0.9467558917660751
     },
     {
       "model": "Gradient Boosting",
-      "accuracy": 0.9577777777777777,
-      "precision": 0.9639681796911558,
-      "recall": 0.8717731696995344,
-      "f1": 0.9155555555555556
+      "accuracy": 0.9592222222222222,
+      "precision": 0.9618681643511676,
+      "recall": 0.93184421534937,
+      "f1": 0.9466181818181818
     }
   ],
   "best_model": "Random Forest",
   "test_metrics": {
-    "accuracy": 0.9627777777777777,
-    "precision": 0.9666357738646896,
-    "recall": 0.8880374627501064,
-    "f1": 0.9256711781672953,
-    "roc_auc": 0.937853828783721,
+    "accuracy": 0.9596666666666667,
+    "precision": 0.9643587496348233,
+    "recall": 0.9319593450028233,
+    "f1": 0.9478822684852836,
+    "roc_auc": 0.9576561914514183,
     "confusion_matrix": [
       [
-        6579,
-        72
+        5336,
+        122
       ],
       [
-        263,
-        2086
+        241,
+        3301
       ]
     ]
   },
   "feature_importance": [
     {
-      "feature": "classroom_capacity",
-      "importance": 0.32512850317617076
-    },
-    {
       "feature": "capacity_difference",
-      "importance": 0.29886679631254304
+      "importance": 0.17706244176368013
     },
     {
-      "feature": "teacher_availability",
-      "importance": 0.24612711048238764
+      "feature": "subject_type_Lab",
+      "importance": 0.17680437823222184
     },
     {
-      "feature": "day_index",
-      "importance": 0.07038120002139973
+      "feature": "lab_requirement",
+      "importance": 0.1549897156511011
     },
     {
-      "feature": "time_slot_index",
-      "importance": 0.0318512073039076
+      "feature": "equipment_match",
+      "importance": 0.14061056066747946
     },
     {
-      "feature": "teacher_workload_ratio",
-      "importance": 0.02557483593920625
+      "feature": "subject_type_Tutorial",
+      "importance": 0.07723083842841703
     },
     {
-      "feature": "division_size",
-      "importance": 0.0010371980392193693
-    },
-    {
-      "feature": "student_count",
-      "importance": 0.0010331487251656495
-    },
-    {
-      "feature": "room_availability",
-      "importance": 0
+      "feature": "classroom_capacity",
+      "importance": 0.07359750152298711
     },
     {
       "feature": "subject_frequency",
+      "importance": 0.07262240585404686
+    },
+    {
+      "feature": "student_count",
+      "importance": 0.0387627548111201
+    },
+    {
+      "feature": "subject_type_Theory",
+      "importance": 0.03833004798467815
+    },
+    {
+      "feature": "division_size",
+      "importance": 0.034116727407501705
+    },
+    {
+      "feature": "teacher_workload_ratio",
+      "importance": 0.010740756619962757
+    },
+    {
+      "feature": "time_slot_index",
+      "importance": 0.0029905780510747475
+    },
+    {
+      "feature": "day_index",
+      "importance": 0.0021412930057291414
+    },
+    {
+      "feature": "teacher_availability",
+      "importance": 0
+    },
+    {
+      "feature": "room_availability",
       "importance": 0
     },
     {
@@ -97,19 +117,7 @@
       "importance": 0
     },
     {
-      "feature": "lab_requirement",
-      "importance": 0
-    },
-    {
-      "feature": "equipment_match",
-      "importance": 0
-    },
-    {
       "feature": "teacher_preference_match",
-      "importance": 0
-    },
-    {
-      "feature": "subject_type_Theory",
       "importance": 0
     }
   ],
@@ -131,5 +139,5 @@
     "equipment_match",
     "teacher_preference_match"
   ],
-  "training_payload_hash": "00cd2009b135e376564357f8130051041dba8baded30fee70fa460078347e3b2"
+  "training_payload_hash": "799640dbf9b79553bb4744d6122dc756cc828b691a524a29c34a2b90398c9092"
 }

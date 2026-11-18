@@ -15,6 +15,7 @@ import argparse, csv, json, math, os, re, sys, traceback
 from pathlib import Path
 from io import StringIO
 from datetime import datetime
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -51,6 +52,22 @@ ROOM_TYPE_CAPACITY_DEFAULTS = {
     "lab": 35,
     "laboratory": 35,
 }
+COMMON_COURSES = (
+    ("Design and Analysis of Algorithms", "Theory", 3),
+    ("Design and Analysis of Algorithms", "Lab", 2),
+    ("Machine Learning", "Theory", 3),
+    ("Machine Learning", "Lab", 2),
+    ("Cloud Computing", "Theory", 3),
+    ("Cloud Computing", "Tutorial", 1),
+    ("Coursera 1", "Theory", 1),
+    ("Coursera 2", "Theory", 1),
+    ("DT", "Tutorial", 1),
+)
+CHOICE_COURSES = {
+    "CN": ("Computer Networks", (("Theory", 3), ("Lab", 2))),
+    "MLOPS": ("MLOPS", (("Theory", 3), ("Lab", 2))),
+}
+ONLINE_COURSES = {"COURSERA1", "COURSERA2", "DT"}
 
 FEATURES = [
     "teacher_availability","teacher_workload_ratio","student_count",
@@ -134,6 +151,17 @@ def parse_subjects(cell):
         out.append({"name":name,"hours":hours,"type":stype})
     return out
 
+def canonical_subject_code(value):
+    return re.sub(r"[^A-Z0-9]", "", norm(value).upper())
+
+def registered_choice(value):
+    code = canonical_subject_code(value)
+    if code in {"MLOPS", "MLOOPS", "MLOOP"} or "MACHINELEARNINGOPERATIONS" in code:
+        return "MLOPS"
+    if code in {"CN", "CNT", "COMPUTERTECHNOLOGY"} or "COMPUTERNETWORK" in code:
+        return "CN"
+    return None
+
 def read_clean_csv(text, required, kind):
     if not str(text or "").strip():
         raise ValueError(f"{kind} CSV is empty.")
@@ -180,8 +208,8 @@ def read_clean_csv(text, required, kind):
                     continue
                 if first.lower() in {"div", "division"}:
                     continue
-                if section and section[0] == "TY" and first.upper() == section[1]:
-                    cells[0] = f"TY-{section[1]}"
+                if section and first.upper() == section[1]:
+                    cells[0] = f"{section[0]}-{section[1]}"
                 elif re.fullmatch(r"AIML\s*-?\s*([A-Z])", first, re.I):
                     match = re.fullmatch(r"AIML\s*-?\s*([A-Z])", first, re.I)
                     cells[0] = f"AIML-{match.group(1).upper()}"
@@ -348,6 +376,11 @@ def read_clean_csv(text, required, kind):
             "subjects",
             "subject"
         ])
+        if subject_col is None:
+            subject_col = next(
+                (c for c in df.columns if re.match(r"^subject_(registered|registred)_", c)),
+                None
+            )
 
         if division_col:
             df["division"] = df[division_col]
@@ -511,8 +544,6 @@ def read_clean_csv(text, required, kind):
 
         invalid = int(bad.sum())
         df = df.loc[~bad].copy()
-        if "student_count" not in df.columns or pd.to_numeric(df["student_count"], errors="coerce").fillna(0).le(0).all():
-            df["student_count"] = df.groupby("division")["division"].transform("count")
 
     # ---------------------------------------------------------
     # OUTLIER DETECTION
@@ -564,33 +595,174 @@ def parse_config(config):
     return {"working_days":days,"hours_per_day":hours,
             "division_settings":c.get("division_settings") or {}}
 
-def division_records(students):
+def division_records(students,rooms=None):
     records=[]
     for div,g in students.groupby("division",dropna=False):
         div=norm(div)
         count=0
         if "student_count" in g.columns:
-            count=max(1,int(pd.to_numeric(g["student_count"],errors="coerce").fillna(0).max()))
-        if count<=0:
-            count=max(1,len(g))
-        subjects=[]
-        for cell in g.get("subjects",pd.Series([""]*len(g))):
-            subjects += parse_subjects(cell)
-        # Deduplicate repeated student rows, while keeping theory, lab and
-        # tutorial offerings for the same course as separate requirements.
-        sm={}
-        for s in subjects:
-            key=(s["name"],s["type"])
-            sm[key]=max(sm.get(key,0),s["hours"])
-        if not sm:
-            sm={
-                ("Data Structures","Theory"):3,
-                ("Database Systems","Theory"):3,
-                ("Machine Learning","Theory"):3,
-                ("Computer Networks","Theory"):3,
-            }
-        specs=[{"name":name,"hours":hours,"type":stype} for (name,stype),hours in sm.items()]
-        records.append({"division":div,"student_count":count,"subjects":specs,
+            count=max(0,int(pd.to_numeric(g["student_count"],errors="coerce").fillna(0).max()))
+        count=max(count,len(g),1)
+        student_choices=[]
+        for _,student in g.iterrows():
+            student_choices.append({
+                choice
+                for subject in parse_subjects(student.get("subjects",""))
+                if (choice:=registered_choice(subject["name"]))
+            })
+
+        batch_count=2 if div.upper().split("-")[-1]=="G" else 3
+        batch_count=min(batch_count,count)
+        batch_base,remainder=divmod(count,batch_count)
+        batch_sizes=[
+            batch_base+(1 if batch_index<remainder else 0)
+            for batch_index in range(batch_count)
+        ]
+        batch_choices=[{"CN":0,"MLOPS":0} for _ in batch_sizes]
+        batch_unassigned=[0 for _ in batch_sizes]
+        batch_student_counts=[0 for _ in batch_sizes]
+        batch_index=0
+        for choices in student_choices:
+            while (
+                batch_index<len(batch_sizes)
+                and batch_student_counts[batch_index]>=batch_sizes[batch_index]
+            ):
+                batch_index+=1
+            if batch_index>=len(batch_sizes):
+                break
+            batch_student_counts[batch_index]+=1
+            if choices:
+                for code in choices:
+                    batch_choices[batch_index][code]+=1
+            else:
+                batch_unassigned[batch_index]+=1
+
+        for index,batch_size in enumerate(batch_sizes):
+            batch_unassigned[index]+=batch_size-batch_student_counts[index]
+
+        base_cohorts=[]
+        for code,(name,_) in CHOICE_COURSES.items():
+            choice_batch_counts=[batch[code] for batch in batch_choices]
+            students_in_choice=sum(choice_batch_counts)
+            if students_in_choice:
+                base_cohorts.append({
+                    "id":f"{div}::{code}",
+                    "label":f"Registered {name} ({students_in_choice} students)",
+                    "student_count":students_in_choice,
+                    "choice_code":code,
+                    "batch_counts":choice_batch_counts,
+                    "batch_group_ids":[None for _ in batch_sizes],
+                })
+        unassigned_count=sum(batch_unassigned)
+        if unassigned_count:
+            base_cohorts.append({
+                "id":f"{div}::UNASSIGNED",
+                "label":"Students without a registered choice",
+                "student_count":unassigned_count,
+                "choice_code":None,
+                "batch_counts":batch_unassigned,
+                "batch_group_ids":[None for _ in batch_sizes],
+            })
+        if not base_cohorts:
+            base_cohorts=[{
+                "id":f"{div}::ALL",
+                "label":"All students",
+                "student_count":count,
+                "choice_code":None,
+                "batch_counts":batch_sizes,
+                "batch_group_ids":[None for _ in batch_sizes],
+            }]
+
+        cohorts=[]
+        batches=[]
+        for batch_index,batch_size in enumerate(batch_sizes):
+            attendance_groups=[]
+            for base in base_cohorts:
+                students_in_batch=base["batch_counts"][batch_index]
+                if not students_in_batch:
+                    continue
+                cohort_id=f"{base['id']}::B{batch_index+1}"
+                choice_name=(
+                    CHOICE_COURSES[base["choice_code"]][0]
+                    if base["choice_code"]
+                    else "Students without a registered choice"
+                )
+                cohort={
+                    "id":cohort_id,
+                    "label":f"{div} · Batch {batch_index+1} · {choice_name} ({students_in_batch} students)",
+                    "student_count":students_in_batch,
+                    "choice_code":base["choice_code"],
+                    "base_cohort_id":base["id"],
+                    "batch_index":batch_index+1,
+                }
+                cohorts.append(cohort)
+                attendance_groups.append(cohort_id)
+                base["batch_group_ids"][batch_index]=cohort_id
+            batches.append({
+                "id":f"{div}::B{batch_index+1}",
+                "label":f"{div} · Batch {batch_index+1} ({batch_size} students)",
+                "student_count":batch_size,
+                "attendance_groups":attendance_groups,
+            })
+
+        all_group_ids=[cohort["id"] for cohort in cohorts]
+        specs=[]
+        for name,stype,hours in COMMON_COURSES:
+            if stype in {"Lab","Tutorial"}:
+                for batch_index,batch in enumerate(batches,1):
+                    specs.append({
+                        "name":name,
+                        "hours":hours,
+                        "type":stype,
+                        "attendance_groups":batch["attendance_groups"],
+                        "cohort_label":f"Batch {batch_index} ({batch['student_count']} students)",
+                        "student_count":batch["student_count"],
+                        "choice_code":None,
+                    })
+            else:
+                specs.append({
+                    "name":name,
+                    "hours":hours,
+                    "type":stype,
+                    "attendance_groups":all_group_ids,
+                    "cohort_label":"All students",
+                    "student_count":count,
+                    "choice_code":None,
+                })
+        for base in base_cohorts:
+            code=base["choice_code"]
+            if not code:
+                continue
+            name,requirements=CHOICE_COURSES[code]
+            for stype,hours in requirements:
+                if stype in {"Lab","Tutorial"}:
+                    for batch_index,students_in_batch in enumerate(base["batch_counts"],1):
+                        if not students_in_batch:
+                            continue
+                        specs.append({
+                            "name":name,
+                            "hours":hours,
+                            "type":stype,
+                            "attendance_groups":[base["batch_group_ids"][batch_index-1]],
+                            "cohort_label":f"{base['label']} · Batch {batch_index} ({students_in_batch} students)",
+                            "student_count":students_in_batch,
+                            "choice_code":code,
+                        })
+                else:
+                    specs.append({
+                        "name":name,
+                        "hours":hours,
+                        "type":stype,
+                        "attendance_groups":[
+                            group_id
+                            for group_id in base["batch_group_ids"]
+                            if group_id
+                        ],
+                        "cohort_label":base["label"],
+                        "student_count":base["student_count"],
+                        "choice_code":code,
+                    })
+        records.append({"division":div,"student_count":count,"cohorts":cohorts,"batches":batches,"subjects":specs,
                         "academic_hours_required":float(pd.to_numeric(g.get("academic_hours_required",pd.Series([0])),errors="coerce").fillna(0).max())})
     return records
 
@@ -611,11 +783,10 @@ def build_synthetic_training(teachers, students, rooms, config, seed=42, n_per=1
     and infeasible examples.
     """
     rng=np.random.default_rng(seed)
-    divs=division_records(students)
-    subjects=sorted({s["name"] for d in divs for s in d["subjects"]}) or ["Data Structures"]
+    divs=division_records(students,rooms)
     base=[]
     for d in divs:
-        for subj in subjects:
+        for subj in d["subjects"]:
             for t in teachers.itertuples():
                 for r in rooms.itertuples():
                     base.append((d,subj,t,r))
@@ -632,18 +803,31 @@ def build_synthetic_training(teachers, students, rooms, config, seed=42, n_per=1
         start=time_to_min(TIME_SLOTS[slot][0]); end=time_to_min(TIME_SLOTS[slot][1])
         teacher_av=1 if teacher_available(t,day,start,end) else 0
         room_av=1 if room_available(r,day,start,end) else 0
-        stype="Lab" if "lab" in subj.lower() or "practical" in subj.lower() else "Theory"
-        capdiff=float(r.capacity-d["student_count"])
+        stype=subj["type"]
+        student_count=subj["student_count"]
+        attendance_groups=subj["attendance_groups"]
+        weekly_hours=max(
+            (
+                sum(
+                    subject["hours"]
+                    for subject in d["subjects"]
+                    if group in subject.get("attendance_groups",attendance_groups)
+                )
+                for group in attendance_groups
+            ),
+            default=0,
+        )
+        capdiff=float(r.capacity-student_count)
         lab_req=1 if stype=="Lab" else 0
         equipment=1 if (not lab_req or parse_bool(getattr(r,"has_lab",0))) else 0
         pref=teacher_preference(t,day,start,end)
         workload_ratio=float(rng.uniform(0.05,.9))
-        subj_freq=next((s["hours"] for s in d["subjects"] if s["name"]==subj),1)
-        feasible=int(teacher_av and room_av and capdiff>=0 and (not lab_req or str(r.room_type).lower()=="lab") and equipment)
+        subj_freq=subj["hours"]
+        feasible=int(teacher_av and room_av and capdiff>=0 and (not lab_req or "lab" in str(r.room_type).lower()) and equipment)
         quality=(2.2*teacher_av+1.7*room_av+1.8*(capdiff>=0)+1.5*equipment+1.2*pref+0.8*(1-workload_ratio)+0.4*(day in config["working_days"]))
         label=int(feasible and quality>=5.0)
         if rng.random()<.04: label=1-label
-        rows.append([teacher_av,workload_ratio,d["student_count"],r.capacity,capdiff,room_av,subj_freq,stype,DAY_INDEX.get(day,0),slot,d["student_count"],float(d["academic_hours_required"] or sum(s["hours"] for s in d["subjects"])),float(sum(s["hours"] for s in d["subjects"])),lab_req,equipment,pref,label])
+        rows.append([teacher_av,workload_ratio,student_count,r.capacity,capdiff,room_av,subj_freq,stype,DAY_INDEX.get(day,0),slot,student_count,float(weekly_hours),float(weekly_hours),lab_req,equipment,pref,label])
     cols=FEATURES+["assignment_feasible"]
     frame=pd.DataFrame(rows,columns=cols)
     # Guarantee both classes for robust train/validation/test splits.
@@ -753,7 +937,8 @@ def room_available(r,day,start,end):
 
 def room_ok(r,stype,student_count):
     if int(getattr(r,"capacity",0)) < student_count: return False
-    if stype=="Lab" and str(getattr(r,"room_type","")).lower()!="lab": return False
+    is_lab_room = "lab" in str(getattr(r,"room_type","")).lower()
+    if (stype=="Lab") != is_lab_room: return False
     return True
 
 def ensure_model(teachers,students,rooms,config):
@@ -765,8 +950,60 @@ def ensure_model(teachers,students,rooms,config):
 def candidate_frame(cands):
     return pd.DataFrame(cands)[FEATURES]
 
+def rotate_teacher_candidates(teachers, limit, rotation):
+    preferences = sorted({preference for _, preference in teachers}, reverse=True)
+    balanced = []
+    for preference in preferences:
+        group = [candidate for candidate in teachers if candidate[1] == preference]
+        offset = rotation % len(group)
+        balanced.extend(group[offset:] + group[:offset])
+    return balanced[:limit]
+
+def select_balanced_candidates(alternatives, limit, teacher_rotation=0, room_rotation=None):
+    remaining = list(alternatives)
+    if limit <= 0 or not remaining:
+        return []
+    if room_rotation is None:
+        room_rotation = teacher_rotation
+
+    teacher_ids = list(dict.fromkeys(c["teacher_id"] for c in remaining))
+    teacher_rank = {
+        teacher_id: (index - teacher_rotation) % len(teacher_ids)
+        for index, teacher_id in enumerate(teacher_ids)
+    }
+    room_ids = list(dict.fromkeys(c["room_number"] for c in remaining))
+    room_rank = {
+        room_id: (index - room_rotation) % len(room_ids)
+        for index, room_id in enumerate(room_ids)
+    }
+    selected = []
+    used_teachers = set()
+    used_rooms = set()
+
+    while remaining and len(selected) < limit:
+        best = max(
+            remaining,
+            key=lambda candidate: (
+                int(candidate["teacher_id"] not in used_teachers)
+                + int(candidate["room_number"] not in used_rooms),
+                candidate["teacher_id"] not in used_teachers,
+                candidate["room_number"] not in used_rooms,
+                -teacher_rank[candidate["teacher_id"]],
+                -room_rank[candidate["room_number"]],
+                candidate.get("ml_score", 0),
+                candidate["features"]["teacher_preference_match"],
+                -candidate["features"]["capacity_difference"],
+            ),
+        )
+        remaining.remove(best)
+        selected.append(best)
+        used_teachers.add(best["teacher_id"])
+        used_rooms.add(best["room_number"])
+
+    return selected
+
 def candidate_generation(teachers, students, rooms, config, model):
-    divs = division_records(students)
+    divs = division_records(students,rooms)
     tasks = []
 
     for d in divs:
@@ -775,15 +1012,33 @@ def candidate_generation(teachers, students, rooms, config, model):
             stype = subj["type"]
             duration = 2 if stype == "Lab" else 1
             count = max(1, int(math.ceil(hours / duration)))
+            attendance_groups=subj.get("attendance_groups") or [f"{d['division']}::ALL"]
+            weekly_hours=max(
+                (
+                    sum(
+                        subject["hours"]
+                        for subject in d["subjects"]
+                        if group in subject.get("attendance_groups",attendance_groups)
+                    )
+                    for group in attendance_groups
+                ),
+                default=0,
+            )
 
             for k in range(count):
                 tasks.append({
-                    "task_id": f"{d['division']}|{subj['name']}|{k+1}",
+                    "task_id": f"{d['division']}|{','.join(attendance_groups)}|{subj['name']}|{stype}|{k+1}",
                     "division": d["division"],
-                    "student_count": d["student_count"],
+                    "student_count": subj.get("student_count",d["student_count"]),
                     "subject": subj["name"],
                     "subject_type": stype,
-                    "duration": duration
+                    "duration": duration,
+                    "attendance_groups": attendance_groups,
+                    "cohort_label": subj.get("cohort_label","All students"),
+                    "choice_code": subj.get("choice_code"),
+                    "online": canonical_subject_code(subj["name"]) in ONLINE_COURSES,
+                    "subject_frequency": hours,
+                    "weekly_student_hours": weekly_hours,
                 })
 
     if not tasks:
@@ -807,8 +1062,18 @@ def candidate_generation(teachers, students, rooms, config, model):
     # This is the main performance improvement.
     MAX_TEACHERS_PER_TASK = 12
     MAX_ROOMS_PER_TASK = 8
+    MAX_CANDIDATES_PER_TIME = 1
 
+    room_task_order = {}
+    room_task_counts = {}
     for task in tasks:
+        if task["online"]:
+            continue
+        room_type = "lab" if task["subject_type"] == "Lab" else "lecture"
+        room_task_order[task["task_id"]] = room_task_counts.get(room_type, 0)
+        room_task_counts[room_type] = room_task_order[task["task_id"]] + 1
+
+    for task_index, task in enumerate(tasks):
 
         division_cfg = config["division_settings"].get(
             task["division"], {}
@@ -835,17 +1100,23 @@ def candidate_generation(teachers, students, rooms, config, model):
         # -----------------------------------------------------
         # PRE-CALCULATE VALID ROOMS
         # -----------------------------------------------------
-        valid_rooms = []
-
-        for r in room_rows:
-            if not room_ok(
-                r,
-                task["subject_type"],
-                task["student_count"]
-            ):
-                continue
-
-            valid_rooms.append(r)
+        if task["online"]:
+            valid_rooms=[
+                SimpleNamespace(
+                    room_number="Online",
+                    capacity=task["student_count"],
+                    room_type="online",
+                    has_lab=0,
+                    available_days="",
+                    available_slots="",
+                )
+            ]
+        else:
+            valid_rooms = []
+            for r in room_rows:
+                if not room_ok(r,task["subject_type"],task["student_count"]):
+                    continue
+                valid_rooms.append(r)
 
         if not valid_rooms:
             raise ValueError(
@@ -915,31 +1186,25 @@ def candidate_generation(teachers, students, rooms, config, model):
                 if not valid_teachers:
                     continue
 
-                # Prefer teachers according to their preferences.
-                valid_teachers.sort(
-                    key=lambda x: x[1],
-                    reverse=True
+                # Preserve preference tiers while distributing the teacher
+                # shortlist across tasks and time slots.
+                teacher_rotation = (
+                    task_index
+                    + DAY_INDEX.get(day, 0) * len(TIME_SLOTS)
+                    + si
                 )
-
-                valid_teachers = valid_teachers[
-                    :MAX_TEACHERS_PER_TASK
-                ]
+                valid_teachers = rotate_teacher_candidates(
+                    sorted(valid_teachers, key=lambda x: x[1], reverse=True),
+                    MAX_TEACHERS_PER_TASK,
+                    teacher_rotation,
+                )
 
                 # -------------------------------------------------
                 # Combine only the reduced teacher/room sets.
                 # -------------------------------------------------
                 for t, pref in valid_teachers:
 
-                    subj_freq = next(
-                        (
-                            s["hours"]
-                            for d in divs
-                            if d["division"] == task["division"]
-                            for s in d["subjects"]
-                            if s["name"] == task["subject"]
-                        ),
-                        1
-                    )
+                    subj_freq = task["subject_frequency"]
 
                     max_hours = float(
                         getattr(
@@ -997,14 +1262,7 @@ def candidate_generation(teachers, students, rooms, config, model):
                                 task["student_count"],
                             "daily_student_hours":
                                 config["hours_per_day"],
-                            "weekly_student_hours":
-                                sum(
-                                    s["hours"]
-                                    for d in divs
-                                    if d["division"]
-                                    == task["division"]
-                                    for s in d["subjects"]
-                                ),
+                            "weekly_student_hours":task["weekly_student_hours"],
                             "lab_requirement":
                                 1
                                 if task["subject_type"] == "Lab"
@@ -1072,23 +1330,23 @@ def candidate_generation(teachers, students, rooms, config, model):
             by_time.setdefault((candidate["day"], candidate["start_index"]), []).append(candidate)
         balanced_candidates = []
         for alternatives in by_time.values():
-            selected = []
-            used_teachers = set()
-            used_rooms = set()
-            while alternatives and len(selected) < 8:
-                best = max(
-                    alternatives,
-                    key=lambda candidate: (
-                        candidate["teacher_id"] not in used_teachers,
-                        candidate["room_number"] not in used_rooms,
-                        candidate["features"]["teacher_preference_match"],
-                        -candidate["features"]["capacity_difference"],
-                    ),
-                )
-                alternatives.remove(best)
-                selected.append(best)
-                used_teachers.add(best["teacher_id"])
-                used_rooms.add(best["room_number"])
+            first = alternatives[0]
+            rotation = (
+                task_index
+                + DAY_INDEX.get(first["day"], 0) * (len(TIME_SLOTS)-1)
+                + first["start_index"]
+            )
+            room_rotation = (
+                room_task_order.get(task["task_id"], task_index)
+                + DAY_INDEX.get(first["day"], 0) * (len(TIME_SLOTS)-1)
+                + first["start_index"]
+            )
+            selected = select_balanced_candidates(
+                alternatives,
+                MAX_CANDIDATES_PER_TIME,
+                rotation,
+                room_rotation,
+            )
             balanced_candidates.extend(selected)
 
         task_candidates = balanced_candidates
@@ -1119,29 +1377,30 @@ def candidate_generation(teachers, students, rooms, config, model):
         ).append(c)
 
     compact = []
+    task_order = {task["task_id"]: index for index, task in enumerate(tasks)}
 
     for task_id, arr in grouped.items():
         by_time = {}
         for candidate in arr:
             by_time.setdefault((candidate["day"], candidate["start_index"]), []).append(candidate)
         for alternatives in by_time.values():
-            selected = []
-            used_teachers = set()
-            used_rooms = set()
-            while alternatives and len(selected) < 8:
-                best = max(
-                    alternatives,
-                    key=lambda candidate: (
-                        candidate["teacher_id"] not in used_teachers,
-                        candidate["room_number"] not in used_rooms,
-                        candidate["ml_score"],
-                        teacher_preference_by_candidate(candidate),
-                    ),
-                )
-                alternatives.remove(best)
-                selected.append(best)
-                used_teachers.add(best["teacher_id"])
-                used_rooms.add(best["room_number"])
+            first = alternatives[0]
+            rotation = (
+                task_order[task_id]
+                + DAY_INDEX.get(first["day"], 0) * (len(TIME_SLOTS)-1)
+                + first["start_index"]
+            )
+            room_rotation = (
+                room_task_order.get(task_id, task_order[task_id])
+                + DAY_INDEX.get(first["day"], 0) * (len(TIME_SLOTS)-1)
+                + first["start_index"]
+            )
+            selected = select_balanced_candidates(
+                alternatives,
+                MAX_CANDIDATES_PER_TIME,
+                rotation,
+                room_rotation,
+            )
             compact.extend(selected)
 
     if not compact:
@@ -1170,15 +1429,20 @@ def build_milp(tasks,cands,config):
         slots=range(c["start_index"],c["start_index"]+c["duration"])
         for si in slots:
             key=("teacher",c["teacher_id"],c["day"],si); resources.setdefault(key,[]).append(i)
-            key=("room",c["room_number"],c["day"],si); resources.setdefault(key,[]).append(i)
-            key=("division",c["division"],c["day"],si); resources.setdefault(key,[]).append(i)
+            if not c.get("online"):
+                key=("room",c["room_number"],c["day"],si); resources.setdefault(key,[]).append(i)
+            for group in c.get("attendance_groups",[f"{c['division']}::ALL"]):
+                key=("division",group,c["day"],si); resources.setdefault(key,[]).append(i)
     for items in resources.values(): add_group(items,0,1)
-    # daily hours per division
+    # Daily hours are limited per attending student cohort, not per division.
     divday={}
-    for i,c in idx.items(): divday.setdefault((c["division"],c["day"]),[]).append((i,c["duration"]))
+    for i,c in idx.items():
+        for group in c.get("attendance_groups",[f"{c['division']}::ALL"]):
+            divday.setdefault((group,c["day"]),[]).append((i,c["duration"],c["division"]))
     for key,items in divday.items():
-        for i,dur in items: rows.append(rowno); cols.append(i); data.append(float(dur))
-        div=key[0]; limit=int(config["division_settings"].get(div,{}).get("hours_per_day",config["hours_per_day"]))
+        for i,dur,_ in items: rows.append(rowno); cols.append(i); data.append(float(dur))
+        div=items[0][2]
+        limit=int(config["division_settings"].get(div,{}).get("hours_per_day",config["hours_per_day"]))
         lb.append(0); ub.append(limit); rowno+=1
     # teacher weekly hours
     tw={}
@@ -1194,10 +1458,26 @@ def build_milp(tasks,cands,config):
         capfit=min(1.0,max(0.0,c["features"]["capacity_difference"]/max(1,c["features"]["student_count"])))
         score=100*c["ml_score"]+8*c["features"]["teacher_preference_match"]+4*capfit-0.8*c["start_index"]
         objective.append(-score)
+
+    lower=np.array(lb)
+    upper=np.array(ub)
+    constraints=LinearConstraint(A,lower,upper)
+
+    def has_feasible_solution(result):
+        if result.x is None:
+            return False
+        values=np.asarray(result.x)
+        if not np.all(np.abs(values-np.round(values))<=1e-5):
+            return False
+        activity=A@values
+        return bool(np.all(activity>=lower-1e-6) and np.all(activity<=upper+1e-6))
+
     result=milp(c=np.array(objective),integrality=np.ones(len(cands)),bounds=Bounds(0,1),
-                constraints=LinearConstraint(A,np.array(lb),np.array(ub)),
-                options={"time_limit":30})
-    if not result.success:
+                constraints=constraints,options={"time_limit":5})
+    if not has_feasible_solution(result):
+        result=milp(c=np.zeros(len(cands)),integrality=np.ones(len(cands)),bounds=Bounds(0,1),
+                    constraints=constraints,options={"time_limit":10})
+    if not has_feasible_solution(result):
         raise ValueError(f"Constraint optimization did not find a feasible solution: {result.message}")
     chosen=[cands[i] for i,v in enumerate(result.x) if v>.5]
     return chosen
@@ -1207,20 +1487,39 @@ def validate_schedule(chosen,config,divs):
     used=set()
     for c in chosen:
         for si in range(c["start_index"],c["start_index"]+c["duration"]):
-            for kind,key in [("Teacher",c["teacher_id"]),("Room",c["room_number"]),("Division",c["division"])]:
+            resources=[("Teacher",c["teacher_id"])]
+            if not c.get("online"):
+                resources.append(("Room",c["room_number"]))
+            resources.extend(
+                ("Division",group)
+                for group in c.get("attendance_groups",[f"{c['division']}::ALL"])
+            )
+            for kind,key in resources:
                 k=(kind,key,c["day"],si)
                 if k in used:
                     conflicts.append({"severity":"high","category":"Conflict","title":f"{kind} conflict",
                                       "detail":f"{key} is double-booked on {c['day']} at slot {si}."})
                 used.add(k)
-    # required hours
+    # Verify required hours separately for each student cohort.
     for d in divs:
-        expected=sum(s["hours"] for s in d["subjects"])
-        actual=sum(c["duration"] for c in chosen if c["division"]==d["division"])
-        if actual+1e-6<expected:
-            conflicts.append({"severity":"high","category":"Weekly hours",
-                              "title":"Weekly hours not satisfied",
-                              "detail":f"{d['division']} requires {expected:g} hours but received {actual:g}."})
+        cohorts=d.get("cohorts") or [{"id":f"{d['division']}::ALL","label":d["division"]}]
+        for cohort in cohorts:
+            group=cohort["id"]
+            expected=sum(
+                subject["hours"]
+                for subject in d["subjects"]
+                if group in subject.get("attendance_groups",[f"{d['division']}::ALL"])
+            )
+            actual=sum(
+                c["duration"]
+                for c in chosen
+                if c["division"]==d["division"]
+                and group in c.get("attendance_groups",[f"{d['division']}::ALL"])
+            )
+            if actual+1e-6<expected:
+                conflicts.append({"severity":"high","category":"Weekly hours",
+                                  "title":"Weekly hours not satisfied",
+                                  "detail":f"{cohort['label']} in {d['division']} requires {expected:g} hours but received {actual:g}."})
     return conflicts
 
 def quality_score(chosen,config,conflicts):
@@ -1237,7 +1536,7 @@ def generate(teachers,students,rooms,config):
     model=joblib.load(MODEL_PATH)
     tasks,cands=candidate_generation(teachers,students,rooms,config,model)
     chosen=build_milp(tasks,cands,config)
-    divs=division_records(students)
+    divs=division_records(students,rooms)
     conflicts=validate_schedule(chosen,config,divs)
     sessions=[]
     for c in sorted(chosen,key=lambda x:(DAY_INDEX.get(x["day"],99),x["start_index"],x["division"])):
@@ -1245,19 +1544,38 @@ def generate(teachers,students,rooms,config):
                          "faculty":c["teacher_name"],"room":c["room_number"],
                          "division":c["division"],"status":"draft",
                          "classType":c["subject_type"],"batch":None,
-                         "batchSize":c["student_count"],"mlScore":round(c["ml_score"]*100,2)})
+                         "batchSize":c["student_count"],"cohort":c["cohort_label"],
+                         "studentCount":c["student_count"],"mlScore":round(c["ml_score"]*100,2)})
     return {"sessions":sessions,"conflicts":conflicts,"quality_score":quality_score(chosen,config,conflicts),
             "model":meta,"candidate_count":len(cands),"task_count":len(tasks)}
 
 def inspect(teachers,students,rooms,config):
     reports=[]
     # read_clean_csv already generated reports externally.
-    divs=division_records(students)
+    divs=division_records(students,rooms)
     subject_counts={}
     for d in divs:
         for s in d["subjects"]: subject_counts[s["name"]]=subject_counts.get(s["name"],0)+s["hours"]
-    return {"divisions":[{"division":d["division"],"student_count":d["student_count"],
-                           "subjects":len(d["subjects"]),"weekly_hours":sum(s["hours"] for s in d["subjects"])} for d in divs],
+    divisions=[]
+    for d in divs:
+        weekly_hours=max(
+            (
+                sum(
+                    subject["hours"]
+                    for subject in d["subjects"]
+                    if cohort["id"] in subject.get("attendance_groups",[])
+                )
+                for cohort in d["cohorts"]
+            ),
+            default=0,
+        )
+        divisions.append({
+            "division":d["division"],
+            "student_count":d["student_count"],
+            "subjects":len({subject["name"] for subject in d["subjects"]}),
+            "weekly_hours":weekly_hours,
+        })
+    return {"divisions":divisions,
             "subject_frequency":subject_counts,
             "student_distribution":{d["division"]:d["student_count"] for d in divs},
             "teacher_workload":{str(r.teacher_name):float(getattr(r,"max_hours_per_week",18) or 18) for r in teachers.itertuples()},

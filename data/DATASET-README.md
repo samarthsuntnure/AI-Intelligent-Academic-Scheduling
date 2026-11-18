@@ -30,3 +30,6 @@ MLOPS: Theory 3h + Lab 2h
 Coursera 1: Theory 1h
 Coursera 2: Theory 1h
 DT: Tutorial 1h
+
+## Curriculum assignment
+The courses above are common to every division. Computer Networks or MLOPS is added only for students registered in that choice; students without a recorded choice still receive the common courses. Divisions are split into three balanced batches, except divisions ending in `-G`, which use two balanced batches. Lab and tutorial sessions are scheduled separately for each division batch. Labs occupy two hours; tutorials occupy one hour.
