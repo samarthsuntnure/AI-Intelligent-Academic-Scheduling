@@ -1,0 +1,5 @@
+[TIMETABLE] ML optimizer could not fit the database cohorts; using the batch-aware constraint scheduler. Error: No suitable classroom found for TY-A - Design and Analysis of Algorithms (students=75, type=Lab).
+    at ChildProcess.<anonymous> (C:\Users\samar\Downloads\VIT-AI-Timetable-ML-Complete-Final (1)\VIT-AI-Timetable-ML-Complete-Final\artifacts\api-server\src\lib\ml-engine.ts:95:16)
+    at ChildProcess.emit (node:events:519:28)
+    at maybeClose (node:internal/child_process:1101:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:304:5)

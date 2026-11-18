@@ -1,0 +1,135 @@
+{
+  "model_version": "1.0",
+  "trained_at": "2026-11-18T14:12:07",
+  "dataset_label": "Synthetic Training Data",
+  "rows": 60000,
+  "train_rows": 42000,
+  "validation_rows": 9000,
+  "test_rows": 9000,
+  "models": [
+    {
+      "model": "Decision Tree",
+      "accuracy": 0.9541111111111111,
+      "precision": 0.9493087557603687,
+      "recall": 0.8717731696995344,
+      "f1": 0.9088903595852637
+    },
+    {
+      "model": "Random Forest",
+      "accuracy": 0.9577777777777777,
+      "precision": 0.9639681796911558,
+      "recall": 0.8717731696995344,
+      "f1": 0.9155555555555556
+    },
+    {
+      "model": "Gradient Boosting",
+      "accuracy": 0.9577777777777777,
+      "precision": 0.9639681796911558,
+      "recall": 0.8717731696995344,
+      "f1": 0.9155555555555556
+    }
+  ],
+  "best_model": "Random Forest",
+  "test_metrics": {
+    "accuracy": 0.9627777777777777,
+    "precision": 0.9666357738646896,
+    "recall": 0.8880374627501064,
+    "f1": 0.9256711781672953,
+    "roc_auc": 0.937853828783721,
+    "confusion_matrix": [
+      [
+        6579,
+        72
+      ],
+      [
+        263,
+        2086
+      ]
+    ]
+  },
+  "feature_importance": [
+    {
+      "feature": "classroom_capacity",
+      "importance": 0.32512850317617076
+    },
+    {
+      "feature": "capacity_difference",
+      "importance": 0.29886679631254304
+    },
+    {
+      "feature": "teacher_availability",
+      "importance": 0.24612711048238764
+    },
+    {
+      "feature": "day_index",
+      "importance": 0.07038120002139973
+    },
+    {
+      "feature": "time_slot_index",
+      "importance": 0.0318512073039076
+    },
+    {
+      "feature": "teacher_workload_ratio",
+      "importance": 0.02557483593920625
+    },
+    {
+      "feature": "division_size",
+      "importance": 0.0010371980392193693
+    },
+    {
+      "feature": "student_count",
+      "importance": 0.0010331487251656495
+    },
+    {
+      "feature": "room_availability",
+      "importance": 0
+    },
+    {
+      "feature": "subject_frequency",
+      "importance": 0
+    },
+    {
+      "feature": "daily_student_hours",
+      "importance": 0
+    },
+    {
+      "feature": "weekly_student_hours",
+      "importance": 0
+    },
+    {
+      "feature": "lab_requirement",
+      "importance": 0
+    },
+    {
+      "feature": "equipment_match",
+      "importance": 0
+    },
+    {
+      "feature": "teacher_preference_match",
+      "importance": 0
+    },
+    {
+      "feature": "subject_type_Theory",
+      "importance": 0
+    }
+  ],
+  "features": [
+    "teacher_availability",
+    "teacher_workload_ratio",
+    "student_count",
+    "classroom_capacity",
+    "capacity_difference",
+    "room_availability",
+    "subject_frequency",
+    "subject_type",
+    "day_index",
+    "time_slot_index",
+    "division_size",
+    "daily_student_hours",
+    "weekly_student_hours",
+    "lab_requirement",
+    "equipment_match",
+    "teacher_preference_match"
+  ],
+  "training_payload_hash": "00cd2009b135e376564357f8130051041dba8baded30fee70fa460078347e3b2"
+}
